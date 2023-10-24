@@ -82,7 +82,9 @@ impl ops::Mul for Value {
         use Value as V;
         match (&self, &rhs) {
             (V::Number(a), V::Number(b)) => Ok(V::Number(a * b)),
-            (V::Text(a), V::Number(b)) => Ok(V::Text(a.repeat((*b as isize).min(0) as usize))),
+            (V::Text(a), V::Number(b)) => {
+                Ok(V::Text(a.repeat((*b as isize).try_into().unwrap_or(0))))
+            }
             _ => Err(RuntimeError::TypeMismatch(self, rhs)),
         }
     }
@@ -300,11 +302,19 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
             }
         }
         Expr::Literal(value) => value,
-        Expr::Variable(name) => vars
-            .get(&name)
-            .cloned()
-            .expect(&format!("undefined variable `{}`", name)),
+        Expr::Variable(name) => match name.as_str() {
+            "COLS" => Value::Number(terminal_size().0 as f32),
+            "ROWS" => Value::Number(terminal_size().1 as f32),
+            _ => vars
+                .get(&name)
+                .cloned()
+                .expect(&format!("undefined variable `{}`", name)),
+        },
     })
+}
+
+fn terminal_size() -> (usize, usize) {
+    term_size::dimensions().expect("failed to get terminal size")
 }
 
 #[derive(Clone, Debug)]
