@@ -1,13 +1,6 @@
 (do
-    (= h (/ COLS 2))
-    (for (= y 0) (< y h) (+= y 1)
-        (for (= x 0) (< x h) (+= x 1)
-            (put (if
-                (== 1 (% (+ x y) 2))
-                "██" "  "
-            ))
-        )
-        (putl)
-    )
+    (put ">")
+    (= input (read))
+    (putl input)
 )
 

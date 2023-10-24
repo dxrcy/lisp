@@ -1,4 +1,11 @@
-use std::{cmp, collections::HashMap, fmt, fs, ops, process, str::Chars};
+use std::{
+    cmp,
+    collections::HashMap,
+    fmt, fs,
+    io::{stdin, stdout, Write},
+    ops, process,
+    str::Chars,
+};
 
 fn main() {
     let file = fs::read_to_string("example").unwrap();
@@ -154,14 +161,24 @@ enum RuntimeError {
     ExpectedType(&'static str, Value),
 }
 
-type Variables = HashMap<String, Value>;
-
-fn run(expr: Expr) -> Result<Value, RuntimeError> {
-    let mut vars = Variables::new();
-    run_part(expr, &mut vars, 0)
+#[derive(Debug, Default)]
+struct State {
+    variables: HashMap<String, Value>,
+    methods: HashMap<String, CustomMethod>,
 }
 
-fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, RuntimeError> {
+#[derive(Clone, Debug)]
+struct CustomMethod {
+    parameters: Vec<String>,
+    body: Vec<Expr>,
+}
+
+fn run(expr: Expr) -> Result<Value, RuntimeError> {
+    let mut state = State::default();
+    run_part(expr, &mut state, 0)
+}
+
+fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, RuntimeError> {
     Ok(match expr {
         Expr::Method(Method { name, args }) => {
             // println!("{}:: {:?}", "  ".repeat(depth), name);
@@ -182,7 +199,7 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                     compile_error!("what to evaluate?")
                 };
                 ( $expr:expr ) => {
-                    run_part($expr, vars, depth + 1)?
+                    run_part($expr, state, depth + 1)?
                 };
             }
             /// Get next argument, and evaluate
@@ -195,19 +212,81 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                 ( $args:expr ) => {{
                     let mut last = Value::default();
                     for arg in $args {
-                        last = run_part(arg, vars, depth + 1)?;
+                        last = run_part(arg, state, depth + 1)?;
                     }
                     last
                 }};
             }
+            macro_rules! no_more {
+                () => {
+                    if args.next().is_some() {
+                        panic!("too many arguments!");
+                    }
+                };
+            }
+            macro_rules! arith2 {
+                ( $op:tt ) => {{
+                    let a = eval_arg!();
+                    let b = eval_arg!();
+                    no_more!();
+                    return a $op b;
+                }};
+            }
+            macro_rules! comp2 {
+                ( $op:tt ) => {{
+                    let a = eval_arg!();
+                    let b = eval_arg!();
+                    no_more!();
+                    Value::Bool(a $op b)
+                }};
+            }
+            macro_rules! logic2 {
+                ( $op:tt ) => {{
+                    let a = eval_arg!().bool()?;
+                    let b = eval_arg!().bool()?;
+                    no_more!();
+                    Value::Bool(a $op b)
+                }};
+            }
+            macro_rules! func1 {
+                ( $($tt:tt)* ) => {{
+                    let a = eval_arg!();
+                    no_more!();
+                    Value::Number(a.number()?.$($tt)*)
+                }};
+            }
 
             match name.as_str() {
+                "+" => arith2!(+),
+                "-" => arith2!(-),
+                "*" => arith2!(*),
+                "/" => arith2!(/),
+                "%" => arith2!(%),
+                "==" => comp2!(==),
+                "!=" => comp2!(!=),
+                "<" => comp2!(<),
+                ">" => comp2!(>),
+                "<=" => comp2!(<=),
+                ">=" => comp2!(>=),
+                "and" => logic2!(&&),
+                "or" => logic2!(||),
+                "sqrt" => func1!(sqrt()),
+                "^2" => func1!(powi(2)),
+                "round" => func1!(round()),
+                "floor" => func1!(floor()),
+                "ceil" => func1!(ceil()),
+                "not" => {
+                    let a = eval_arg!().bool()?;
+                    no_more!();
+                    Value::Bool(!a)
+                }
                 "do" => eval_all!(args),
                 "exit" => {
                     let code = match args.next() {
                         Some(arg) => eval!(arg).number()? as i32,
                         None => 0,
                     };
+                    no_more!();
                     process::exit(code)
                 }
 
@@ -224,26 +303,13 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                     println!();
                     Value::Null
                 }
-                "+" => return eval_arg!() + eval_arg!(),
-                "-" => return eval_arg!() - eval_arg!(),
-                "*" => return eval_arg!() * eval_arg!(),
-                "/" => return eval_arg!() / eval_arg!(),
-                "%" => return eval_arg!() % eval_arg!(),
-                "==" => Value::Bool(eval_arg!() == eval_arg!()),
-                "!=" => Value::Bool(eval_arg!() != eval_arg!()),
-                "<" => Value::Bool(eval_arg!() < eval_arg!()),
-                ">" => Value::Bool(eval_arg!() > eval_arg!()),
-                "<=" => Value::Bool(eval_arg!() <= eval_arg!()),
-                ">=" => Value::Bool(eval_arg!() >= eval_arg!()),
-                "and" => Value::Bool(eval_arg!().bool()? && eval_arg!().bool()?),
-                "or" => Value::Bool(eval_arg!().bool()? || eval_arg!().bool()?),
-                "not" => Value::Bool(!eval_arg!().bool()?),
                 "set" | "=" => {
                     let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
                     };
                     let value = eval_arg!();
-                    vars.insert(name, value);
+                    no_more!();
+                    state.variables.insert(name, value);
                     Value::Null
                 }
                 "+=" => {
@@ -251,7 +317,8 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                         panic!("variable name must be string");
                     };
                     let rhs = eval_arg!();
-                    let value = vars.get_mut(&name).expect("variable not set");
+                    no_more!();
+                    let value = state.variables.get_mut(&name).expect("variable not set");
                     *value = (value.clone() + rhs)?;
                     Value::Null
                 }
@@ -259,11 +326,12 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                     let condition = eval_arg!();
                     let happy = arg!();
                     let unhappy = args.next();
+                    no_more!();
                     if condition == Value::Bool(true) {
                         eval!(happy)
                     } else {
-                        if let Some(arg) = unhappy {
-                            eval!(arg)
+                        if let Some(unhappy) = unhappy {
+                            eval!(unhappy)
                         } else {
                             Value::Null
                         }
@@ -290,27 +358,79 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                     }
                     last
                 }
-                "sqrt" => {
-                    let a = eval_arg!().number()?;
-                    Value::Number(a.sqrt())
+                "read" => {
+                    no_more!();
+                    Value::Text(read_input())
                 }
-                "^2" => {
-                    let a = eval_arg!().number()?;
-                    Value::Number(a.powi(2))
+                "def" => {
+                    let Expr::Method(Method {
+                        name,
+                        args: param_exprs,
+                    }) = arg!()
+                    else {
+                        panic!("method name must be group with name");
+                    };
+                    let mut parameters = Vec::new();
+                    for param in param_exprs {
+                        let Expr::Variable(param) = param else {
+                            panic!("method parameter name must be string ");
+                        };
+                        parameters.push(param);
+                    }
+                    let body = args.collect();
+                    state
+                        .methods
+                        .insert(name, CustomMethod { parameters, body });
+                    Value::Null
                 }
-                _ => panic!("unknown method `{}`", name),
+                _ => {
+                    let method = state.methods.get(&name).cloned();
+                    match method {
+                        Some(CustomMethod { parameters, body }) => {
+                            for param in parameters {
+                                let arg = match args.next() {
+                                    Some(arg) => eval!(arg),
+                                    None => Value::Null,
+                                };
+                                state.variables.insert(param, arg);
+                            }
+                            let mut last = Value::Null;
+                            for expr in body {
+                                last = eval!(expr);
+                            }
+                            last
+                        }
+                        None => panic!("unknown method `{}`", name),
+                    }
+                }
             }
         }
         Expr::Literal(value) => value,
         Expr::Variable(name) => match name.as_str() {
             "COLS" => Value::Number(terminal_size().0 as f32),
             "ROWS" => Value::Number(terminal_size().1 as f32),
-            _ => vars
+            _ => state
+                .variables
                 .get(&name)
                 .cloned()
                 .expect(&format!("undefined variable `{}`", name)),
         },
     })
+}
+
+fn read_input() -> String {
+    let mut s = String::new();
+    let _ = stdout().flush();
+    stdin()
+        .read_line(&mut s)
+        .expect("Did not enter a correct string");
+    if let Some('\n') = s.chars().next_back() {
+        s.pop();
+    }
+    if let Some('\r') = s.chars().next_back() {
+        s.pop();
+    }
+    s
 }
 
 fn terminal_size() -> (usize, usize) {
