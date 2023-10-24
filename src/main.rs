@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap, fmt, fs, ops, str::Chars};
+use std::{cmp, collections::HashMap, fmt, fs, ops, process, str::Chars};
 
 fn main() {
     let file = fs::read_to_string("example").unwrap();
@@ -10,18 +10,37 @@ fn main() {
     // println!("{:#?}", tree);
 
     let result = run(tree);
-    if result != Value::Null {
-        println!(">> {}", result);
+    match result {
+        Ok(result) => {
+            if result != Value::Null {
+                println!(">> {}", result);
+            }
+        }
+        Err(err) => {
+            eprintln!("\x1b[31mRuntime error: \x1b[33m{:?}\x1b[0m", err);
+            eprintln!("{}", err);
+        }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 enum Value {
     #[default]
     Null,
     Text(String),
     Number(i32),
     Bool(bool),
+}
+
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Text(a) => write!(f, "\"{}\"", a),
+            Value::Number(a) => write!(f, "{}", a),
+            Value::Bool(a) => write!(f, "<{}>", a),
+            Value::Null => write!(f, "<null>"),
+        }
+    }
 }
 
 impl fmt::Display for Value {
@@ -35,26 +54,52 @@ impl fmt::Display for Value {
     }
 }
 
-impl ops::Mul for Value {
-    type Output = Self;
-    fn mul(self, rhs: Self) -> Self::Output {
-        use Value as V;
-        match (self, rhs) {
-            (V::Number(a), V::Number(b)) => V::Number(a * b),
-            _ => panic!("type mismatch"),
-        }
-    }
-}
 impl ops::Add for Value {
-    type Output = Self;
+    type Output = Result<Self, RuntimeError>;
     fn add(self, rhs: Self) -> Self::Output {
         use Value as V;
-        match (self, rhs) {
-            (V::Number(a), V::Number(b)) => V::Number(a + b),
-            _ => panic!("type mismatch"),
+        match (&self, &rhs) {
+            (V::Number(a), V::Number(b)) => Ok(V::Number(a + b)),
+            (V::Text(a), V::Text(b)) => Ok(V::Text(a.clone() + b)),
+            _ => Err(RuntimeError::TypeMismatch(self, rhs)),
         }
     }
 }
+impl ops::Sub for Value {
+    type Output = Result<Self, RuntimeError>;
+    fn sub(self, rhs: Self) -> Self::Output {
+        use Value as V;
+        match (&self, &rhs) {
+            (V::Number(a), V::Number(b)) => Ok(V::Number(a - b)),
+            _ => Err(RuntimeError::TypeMismatch(self, rhs)),
+        }
+    }
+}
+impl ops::Mul for Value {
+    type Output = Result<Self, RuntimeError>;
+    fn mul(self, rhs: Self) -> Self::Output {
+        use Value as V;
+        match (&self, &rhs) {
+            (V::Number(a), V::Number(b)) => Ok(V::Number(a * b)),
+            (V::Text(a), V::Number(b)) => {
+                Ok(V::Text(a.repeat((*b).try_into().unwrap_or_default())))
+            }
+            _ => Err(RuntimeError::TypeMismatch(self, rhs)),
+        }
+    }
+}
+// impl cmp::PartialEq for Value {
+//     fn eq(&self, rhs: &Self) -> bool {
+//         use Value as V;
+//         match (self, rhs) {
+//             (V::Text(a), V::Text(b)) => a == b,
+//             (V::Number(a), V::Number(b)) => a == b,
+//             (V::Bool(a), V::Bool(b)) => a == b,
+//             (V::Null, V::Null) => true,
+//             _ => false,
+//         }
+//     }
+// }
 impl cmp::PartialOrd for Value {
     fn partial_cmp(&self, rhs: &Self) -> Option<cmp::Ordering> {
         use Value as V;
@@ -65,76 +110,131 @@ impl cmp::PartialOrd for Value {
     }
 }
 
+impl Value {
+    fn number(self) -> Result<i32, RuntimeError> {
+        match self {
+            Value::Number(a) => Ok(a),
+            _ => Err(RuntimeError::ExpectedNumber(self)),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RuntimeError {
+    #[error("cannot use this operation with these types\n   left: {0:?}\n  right: {1:?}")]
+    TypeMismatch(Value, Value),
+    #[error("a number was expected, but not given\n   actual: {0:?}")]
+    ExpectedNumber(Value),
+}
+
 type Variables = HashMap<String, Value>;
 
-fn run(expr: Expr) -> Value {
+fn run(expr: Expr) -> Result<Value, RuntimeError> {
     let mut vars = Variables::new();
     run_part(expr, &mut vars, 0)
 }
 
-fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Value {
-    match expr {
+fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, RuntimeError> {
+    Ok(match expr {
         Expr::Method(Method { name, args }) => {
             // println!("{}:: {:?}", "  ".repeat(depth), name);
+            // println!("{:?}", args);
             // println!("{:?}", vars);
 
             let mut args = args.into_iter();
 
             /// Get next argument, without evaluating (lazy)
-            macro_rules! arg_expr {
+            macro_rules! arg {
                 () => {
                     args.next().expect("missing argument")
                 };
             }
             /// Evaluate an expression
             macro_rules! eval {
+                () => {
+                    compile_error!("what to evaluate?")
+                };
                 ( $expr:expr ) => {
-                    run_part($expr, vars, depth + 1)
+                    run_part($expr, vars, depth + 1)?
                 };
             }
             /// Get next argument, and evaluate
-            macro_rules! arg {
+            macro_rules! eval_arg {
                 () => {
-                    eval!(arg_expr!())
+                    eval!(arg!())
                 };
             }
             macro_rules! eval_all {
-                ( $args:expr ) => {
-                    $args.map(|arg| eval!(arg)).last().unwrap_or_default()
-                };
+                ( $args:expr ) => {{
+                    let mut last = Value::default();
+                    for arg in $args {
+                        last = run_part(arg, vars, depth + 1)?;
+                    }
+                    last
+                }};
             }
 
             match name.as_str() {
                 "do" => eval_all!(args),
-                "print" => {
+                "exit" => {
+                    let code = match args.next() {
+                        Some(arg) => eval!(arg).number()?,
+                        None => 0,
+                    };
+                    process::exit(code)
+                }
+
+                "put" => {
+                    for arg in args {
+                        print!("{}", eval!(arg));
+                    }
+                    Value::Null
+                }
+                "putl" => {
                     for arg in args {
                         print!("{}", eval!(arg));
                     }
                     println!();
                     Value::Null
                 }
-                "*" => arg!() * arg!(),
-                "+" => arg!() + arg!(),
-                "<" => Value::Bool(arg!() < arg!()),
+                "+" => return eval_arg!() + eval_arg!(),
+                "-" => return eval_arg!() - eval_arg!(),
+                "*" => return eval_arg!() * eval_arg!(),
+                "==" => Value::Bool(eval_arg!() == eval_arg!()),
+                "<" => Value::Bool(eval_arg!() < eval_arg!()),
                 "set" | "=" => {
-                    let Expr::Variable(name) = arg_expr!() else {
+                    let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
                     };
-                    let value = arg!();
+                    let value = eval_arg!();
                     vars.insert(name, value);
                     Value::Null
                 }
                 "+=" => {
-                    let Expr::Variable(name) = arg_expr!() else {
+                    let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
                     };
-                    let rhs = arg!();
+                    let rhs = eval_arg!();
                     let value = vars.get_mut(&name).expect("variable not set");
-                    *value = value.clone() + rhs;
+                    *value = (value.clone() + rhs)?;
                     Value::Null
                 }
+                "if" => {
+                    let condition = eval_arg!();
+                    let happy = arg!();
+                    let unhappy = args.next();
+                    if condition == Value::Bool(true) {
+                        eval!(happy)
+                    } else {
+                        if let Some(arg) = unhappy {
+                            eval!(arg)
+                        } else {
+                            Value::Null
+                        }
+                    }
+                }
                 "while" => {
-                    let condition = arg_expr!();
+                    let condition = arg!();
 
                     let mut last = Value::Null;
                     while eval!(condition.clone()) == Value::Bool(true) {
@@ -143,9 +243,9 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Value {
                     last
                 }
                 "for" => {
-                    let _ = arg!();
-                    let condition = arg_expr!();
-                    let run_each = arg_expr!();
+                    let _ = eval_arg!();
+                    let condition = arg!();
+                    let run_each = arg!();
 
                     let mut last = Value::Null;
                     while eval!(condition.clone()) == Value::Bool(true) {
@@ -162,7 +262,7 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Value {
             .get(&name)
             .cloned()
             .expect(&format!("undefined variable `{}`", name)),
-    }
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -187,22 +287,28 @@ fn parse(tree: TokenTree) -> Expr {
         panic!("top level token must be a group");
     }
     assert!(tokens.next().is_none(), "too many tokens");
-    parse_part(token, 0)
+    parse_part(token, 0).expect("nothing here to run!")
 }
 
-fn parse_part(token: Token, depth: usize) -> Expr {
+fn parse_part(token: Token, depth: usize) -> Option<Expr> {
     assert!(depth < 20, "max depth");
 
     match token {
-        Token::Text(text) => parse_text_token(text),
+        Token::Text(text) => Some(parse_text_token(text)),
         Token::Group(tree) => {
             let mut tokens = tree.0.into_iter();
             let name = tokens.next().expect("empty group");
             let Token::Text(name) = name else {
                 panic!("group must start with name");
             };
-            let args = tokens.map(|arg| parse_part(arg, depth + 1)).collect();
-            return Expr::Method(Method { name, args });
+            if name.starts_with('#') {
+                return None;
+            }
+            let args = tokens
+                .map(|arg| parse_part(arg, depth + 1))
+                .flatten()
+                .collect();
+            return Some(Expr::Method(Method { name, args }));
         }
     }
 }
@@ -218,7 +324,7 @@ fn parse_text_token(text: String) -> Expr {
         let mut chars = text.chars();
         chars.next();
         chars.next_back();
-        return Expr::Literal(Value::Text(chars.as_str().to_string()));
+        return Expr::Literal(Value::Text(replace_escaped_chars(chars.as_str())));
     }
     if let Ok(number) = text.parse() {
         return Expr::Literal(Value::Number(number));
@@ -227,6 +333,30 @@ fn parse_text_token(text: String) -> Expr {
         return Expr::Variable(text);
     }
     panic!("unexpected token `{}`", text)
+}
+
+fn replace_escaped_chars(text: &str) -> String {
+    const ESCAPABLE_CHARS: &[[char; 2]] = &[['n', '\n'], ['t', '\t']];
+
+    let mut out = String::new();
+    let mut is_escaped = false;
+    'a: for ch in text.chars() {
+        if is_escaped {
+            for [old, new] in ESCAPABLE_CHARS {
+                if old == &ch {
+                    out.push(*new);
+                    is_escaped = false;
+                    continue 'a;
+                }
+            }
+            panic!("unknown special character `\\{}`", ch);
+        } else if ch == '\\' {
+            is_escaped = true;
+            continue 'a;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn is_valid_variable_name(text: &str) -> bool {
@@ -259,13 +389,27 @@ fn lex_part(chars: &mut Chars, depth: usize) -> TokenTree {
     let mut tree = Vec::new();
     let mut current_text = String::new();
     let mut in_quote = false;
+    let mut is_escaped = false;
 
     while let Some(ch) = chars.next() {
-        if ch == '"' {
-            in_quote ^= true;
-        } else if !in_quote {
+        if in_quote {
+            if !is_escaped {
+                if ch == '\\' {
+                    is_escaped = true;
+                } else if ch == '"' {
+                    in_quote = false;
+                }
+            } else {
+                is_escaped = false;
+            }
+        } else {
             match ch {
+                '"' => in_quote = true,
                 '(' => {
+                    if !current_text.is_empty() {
+                        tree.push(Token::Text(current_text));
+                        current_text = String::new();
+                    }
                     tree.push(Token::Group(lex_part(chars, depth + 1)));
                     continue;
                 }
@@ -279,8 +423,8 @@ fn lex_part(chars: &mut Chars, depth: usize) -> TokenTree {
                 ' ' | '\n' => {
                     if !current_text.is_empty() {
                         tree.push(Token::Text(current_text));
+                        current_text = String::new();
                     }
-                    current_text = String::new();
                     continue;
                 }
                 _ => (),
@@ -289,6 +433,9 @@ fn lex_part(chars: &mut Chars, depth: usize) -> TokenTree {
 
         current_text.push(ch);
     }
+
+    assert!(!in_quote, "missing closing quote");
+    assert!(depth == 0, "missing closing bracket");
 
     if !current_text.is_empty() {
         tree.push(Token::Text(current_text));
