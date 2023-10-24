@@ -28,9 +28,10 @@ enum Value {
     #[default]
     Null,
     Text(String),
-    Number(i32),
+    Number(Number),
     Bool(bool),
 }
+type Number = f32;
 
 impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -81,9 +82,27 @@ impl ops::Mul for Value {
         use Value as V;
         match (&self, &rhs) {
             (V::Number(a), V::Number(b)) => Ok(V::Number(a * b)),
-            (V::Text(a), V::Number(b)) => {
-                Ok(V::Text(a.repeat((*b).try_into().unwrap_or_default())))
-            }
+            (V::Text(a), V::Number(b)) => Ok(V::Text(a.repeat((*b as isize).min(0) as usize))),
+            _ => Err(RuntimeError::TypeMismatch(self, rhs)),
+        }
+    }
+}
+impl ops::Div for Value {
+    type Output = Result<Self, RuntimeError>;
+    fn div(self, rhs: Self) -> Self::Output {
+        use Value as V;
+        match (&self, &rhs) {
+            (V::Number(a), V::Number(b)) => Ok(V::Number(a / b)),
+            _ => Err(RuntimeError::TypeMismatch(self, rhs)),
+        }
+    }
+}
+impl ops::Rem for Value {
+    type Output = Result<Self, RuntimeError>;
+    fn rem(self, rhs: Self) -> Self::Output {
+        use Value as V;
+        match (&self, &rhs) {
+            (V::Number(a), V::Number(b)) => Ok(V::Number(a % b)),
             _ => Err(RuntimeError::TypeMismatch(self, rhs)),
         }
     }
@@ -111,10 +130,16 @@ impl cmp::PartialOrd for Value {
 }
 
 impl Value {
-    fn number(self) -> Result<i32, RuntimeError> {
+    fn number(self) -> Result<Number, RuntimeError> {
         match self {
             Value::Number(a) => Ok(a),
-            _ => Err(RuntimeError::ExpectedNumber(self)),
+            _ => Err(RuntimeError::ExpectedType("number", self)),
+        }
+    }
+    fn bool(self) -> Result<bool, RuntimeError> {
+        match self {
+            Value::Bool(a) => Ok(a),
+            _ => Err(RuntimeError::ExpectedType("bool", self)),
         }
     }
 }
@@ -123,8 +148,8 @@ impl Value {
 enum RuntimeError {
     #[error("cannot use this operation with these types\n   left: {0:?}\n  right: {1:?}")]
     TypeMismatch(Value, Value),
-    #[error("a number was expected, but not given\n   actual: {0:?}")]
-    ExpectedNumber(Value),
+    #[error("the expected type was not given\n  expected: {{{0}}}\n    actual: {1:?}")]
+    ExpectedType(&'static str, Value),
 }
 
 type Variables = HashMap<String, Value>;
@@ -178,7 +203,7 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                 "do" => eval_all!(args),
                 "exit" => {
                     let code = match args.next() {
-                        Some(arg) => eval!(arg).number()?,
+                        Some(arg) => eval!(arg).number()? as i32,
                         None => 0,
                     };
                     process::exit(code)
@@ -200,8 +225,17 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                 "+" => return eval_arg!() + eval_arg!(),
                 "-" => return eval_arg!() - eval_arg!(),
                 "*" => return eval_arg!() * eval_arg!(),
+                "/" => return eval_arg!() / eval_arg!(),
+                "%" => return eval_arg!() % eval_arg!(),
                 "==" => Value::Bool(eval_arg!() == eval_arg!()),
+                "!=" => Value::Bool(eval_arg!() != eval_arg!()),
                 "<" => Value::Bool(eval_arg!() < eval_arg!()),
+                ">" => Value::Bool(eval_arg!() > eval_arg!()),
+                "<=" => Value::Bool(eval_arg!() <= eval_arg!()),
+                ">=" => Value::Bool(eval_arg!() >= eval_arg!()),
+                "and" => Value::Bool(eval_arg!().bool()? && eval_arg!().bool()?),
+                "or" => Value::Bool(eval_arg!().bool()? || eval_arg!().bool()?),
+                "not" => Value::Bool(!eval_arg!().bool()?),
                 "set" | "=" => {
                     let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
@@ -253,6 +287,14 @@ fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Result<Value, Run
                         eval!(run_each.clone());
                     }
                     last
+                }
+                "sqrt" => {
+                    let a = eval_arg!().number()?;
+                    Value::Number(a.sqrt())
+                }
+                "^2" => {
+                    let a = eval_arg!().number()?;
+                    Value::Number(a.powi(2))
                 }
                 _ => panic!("unknown method `{}`", name),
             }
