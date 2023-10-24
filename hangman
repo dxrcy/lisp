@@ -1,0 +1,55 @@
+(do
+    (def (remove_empty list)
+        (= new [])
+        (for (= i 0) (< i (len list)) (+= i 1)
+            (putl i)
+            (= item (get i list))
+            (if (!= item "")
+                (+= new item)
+            )
+        )
+        new
+    )
+    (def (contains item list)
+        (= answer false)
+        (for (= i 0) (< i (len list)) (+= i 1)
+            (if (== item (get i list))
+                (= answer true)
+            )
+        )
+        answer
+    )
+
+    (= words (remove_empty (split "\n" (fopen "words.txt"))))
+    (inspect words)
+
+    (= word (get (floor (* (random) (len words))) words))
+    (inspect word)
+
+    (= correct "smoe")
+    (= incorrect "")
+
+    (forever
+        (= show "")
+        (for (= i 0) (< i (len word)) (+= i 1)
+            (= ch (get i word))
+            (putl i " " ch)
+            (+= show
+                (if (contains ch correct)
+                    ch
+                    "_"
+                )
+            )
+        )
+        (putl show)
+
+        (if (== show word) (do
+            (putl "\n========\n   WIN\n========")
+            break
+        ))
+
+
+        (exit)
+    )
+)
+

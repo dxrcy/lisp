@@ -1,3 +1,4 @@
+use rand::Rng;
 use std::{
     cmp,
     collections::HashMap,
@@ -37,6 +38,7 @@ enum Value {
     Text(String),
     Number(Number),
     Bool(bool),
+    List(Vec<Value>),
 }
 type Number = f32;
 
@@ -47,6 +49,16 @@ impl fmt::Debug for Value {
             Value::Number(a) => write!(f, "{}", a),
             Value::Bool(a) => write!(f, "<{}>", a),
             Value::Null => write!(f, "<null>"),
+            Value::List(list) => {
+                write!(f, "[")?;
+                for (i, item) in list.into_iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", item)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }
@@ -58,6 +70,9 @@ impl fmt::Display for Value {
             Value::Number(a) => write!(f, "\x1b[33m{}\x1b[0m", a),
             Value::Bool(a) => write!(f, "\x1b[1;33m{}\x1b[0m", a),
             Value::Null => write!(f, "\x1b[31mnull\x1b[0m"),
+            Value::List(_) => {
+                write!(f, "\x1b[32m[...]\x1b[0m")
+            }
         }
     }
 }
@@ -66,10 +81,14 @@ impl ops::Add for Value {
     type Output = Result<Self, RuntimeError>;
     fn add(self, rhs: Self) -> Self::Output {
         use Value as V;
-        match (&self, &rhs) {
+        match (self, rhs) {
             (V::Number(a), V::Number(b)) => Ok(V::Number(a + b)),
-            (V::Text(a), V::Text(b)) => Ok(V::Text(a.clone() + b)),
-            _ => Err(RuntimeError::TypeMismatch(self, rhs)),
+            (V::Text(a), V::Text(b)) => Ok(V::Text(a + &b)),
+            (V::List(mut a), b) => {
+                a.push(b);
+                Ok(V::List(a))
+            }
+            (a, b) => Err(RuntimeError::TypeMismatch(a, b)),
         }
     }
 }
@@ -116,18 +135,6 @@ impl ops::Rem for Value {
         }
     }
 }
-// impl cmp::PartialEq for Value {
-//     fn eq(&self, rhs: &Self) -> bool {
-//         use Value as V;
-//         match (self, rhs) {
-//             (V::Text(a), V::Text(b)) => a == b,
-//             (V::Number(a), V::Number(b)) => a == b,
-//             (V::Bool(a), V::Bool(b)) => a == b,
-//             (V::Null, V::Null) => true,
-//             _ => false,
-//         }
-//     }
-// }
 impl cmp::PartialOrd for Value {
     fn partial_cmp(&self, rhs: &Self) -> Option<cmp::Ordering> {
         use Value as V;
@@ -151,6 +158,40 @@ impl Value {
             _ => Err(RuntimeError::ExpectedType("bool", self)),
         }
     }
+    fn text(self) -> Result<String, RuntimeError> {
+        match self {
+            Value::Text(a) => Ok(a),
+            _ => Err(RuntimeError::ExpectedType("text", self)),
+        }
+    }
+    fn list(self) -> Result<Vec<Value>, RuntimeError> {
+        match self {
+            Value::List(a) => Ok(a),
+            Value::Text(a) => Ok(a.chars().map(|ch| Value::Text(ch.to_string())).collect()),
+            _ => Err(RuntimeError::ExpectedType("list", self)),
+        }
+    }
+
+    fn as_number(self) -> Self {
+        match self {
+            Value::Number(_) => self,
+            Value::Text(a) => match a.parse() {
+                Ok(a) => Value::Number(a),
+                _ => Value::Null,
+            },
+            _ => Value::Null,
+        }
+    }
+
+    fn length(self) -> Option<usize> {
+        match self {
+            Value::Number(a) => Some(a.to_string().len()),
+            Value::Text(a) => Some(a.len()),
+            Value::Bool(_) => None,
+            Value::Null => None,
+            Value::List(a) => Some(a.len()),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -161,10 +202,11 @@ enum RuntimeError {
     ExpectedType(&'static str, Value),
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct State {
     variables: HashMap<String, Value>,
     methods: HashMap<String, CustomMethod>,
+    do_break: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -179,12 +221,8 @@ fn run(expr: Expr) -> Result<Value, RuntimeError> {
 }
 
 fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, RuntimeError> {
-    Ok(match expr {
+    let value = match expr {
         Expr::Method(Method { name, args }) => {
-            // println!("{}:: {:?}", "  ".repeat(depth), name);
-            // println!("{:?}", args);
-            // println!("{:?}", vars);
-
             let mut args = args.into_iter();
 
             /// Get next argument, without evaluating (lazy)
@@ -213,7 +251,11 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     let mut last = Value::default();
                     for arg in $args {
                         last = run_part(arg, state, depth + 1)?;
+                        if state.do_break {
+                            break;
+                        }
                     }
+                    // println!("after loop {}", okay_break);
                     last
                 }};
             }
@@ -229,7 +271,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     let a = eval_arg!();
                     let b = eval_arg!();
                     no_more!();
-                    return a $op b;
+                    (a $op b)?
                 }};
             }
             macro_rules! comp2 {
@@ -280,7 +322,6 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     no_more!();
                     Value::Bool(!a)
                 }
-                "do" => eval_all!(args),
                 "exit" => {
                     let code = match args.next() {
                         Some(arg) => eval!(arg).number()? as i32,
@@ -303,7 +344,13 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     println!();
                     Value::Null
                 }
-                "set" | "=" => {
+                "inspect" => {
+                    for arg in args {
+                        println!("{:?}", eval!(arg));
+                    }
+                    Value::Null
+                }
+                "=" => {
                     let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
                     };
@@ -337,16 +384,38 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                         }
                     }
                 }
+                "do" => {
+                    // println!("forever");
+                    eval_all!(args)
+                }
+                "forever" => {
+                    // println!("forever");
+                    let mut last;
+                    loop {
+                        last = eval_all!(args.clone());
+                        if state.do_break {
+                            state.do_break = false;
+                            break;
+                        }
+                    }
+                    last
+                }
                 "while" => {
+                    // println!("while");
                     let condition = arg!();
 
                     let mut last = Value::Null;
                     while eval!(condition.clone()) == Value::Bool(true) {
                         last = eval_all!(args.clone());
+                        if state.do_break {
+                            state.do_break = false;
+                            break;
+                        }
                     }
                     last
                 }
                 "for" => {
+                    // println!("for");
                     let _ = eval_arg!();
                     let condition = arg!();
                     let run_each = arg!();
@@ -354,13 +423,66 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     let mut last = Value::Null;
                     while eval!(condition.clone()) == Value::Bool(true) {
                         last = eval_all!(args.clone());
+                        if state.do_break {
+                            state.do_break = false;
+                            break;
+                        }
                         eval!(run_each.clone());
                     }
                     last
                 }
+                "break" => {
+                    state.do_break = true;
+                    // println!("call break");
+                    Value::Null
+                }
                 "read" => {
                     no_more!();
                     Value::Text(read_input())
+                }
+                "num" => {
+                    let a = eval_arg!();
+                    no_more!();
+                    a.as_number()
+                }
+                "fopen" => {
+                    let Value::Text(filename) = eval_arg!() else {
+                        panic!("filename argument must be string");
+                    };
+                    no_more!();
+                    let file = fs::read_to_string(filename).expect("Failed to open file");
+                    Value::Text(file)
+                }
+                "split" => {
+                    let delim = eval_arg!().text()?;
+                    let input = eval_arg!().text()?;
+                    no_more!();
+                    Value::List(
+                        input
+                            .split(&delim)
+                            .map(|text| Value::Text(text.to_string()))
+                            .collect(),
+                    )
+                }
+                "len" => {
+                    let a = eval_arg!();
+                    no_more!();
+                    match a.length() {
+                        Some(len) => Value::Number(len as f32),
+                        None => Value::Null,
+                    }
+                }
+                "get" => {
+                    let index = eval_arg!().number()?;
+                    let list = eval_arg!().list()?;
+                    match list.get(index as usize) {
+                        Some(item) => item.to_owned(),
+                        None => Value::Null,
+                    }
+                }
+                "random" => {
+                    let mut rng = rand::thread_rng();
+                    Value::Number(rng.gen_range(0.0..=1.0))
                 }
                 "def" => {
                     let Expr::Method(Method {
@@ -387,6 +509,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     let method = state.methods.get(&name).cloned();
                     match method {
                         Some(CustomMethod { parameters, body }) => {
+                            let old_state = state.clone();
                             for param in parameters {
                                 let arg = match args.next() {
                                     Some(arg) => eval!(arg),
@@ -398,6 +521,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                             for expr in body {
                                 last = eval!(expr);
                             }
+                            *state = old_state;
                             last
                         }
                         None => panic!("unknown method `{}`", name),
@@ -415,7 +539,9 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                 .cloned()
                 .expect(&format!("undefined variable `{}`", name)),
         },
-    })
+    };
+
+    Ok(value)
 }
 
 fn read_input() -> String {
@@ -503,6 +629,9 @@ fn parse_text_token(text: String) -> Expr {
     }
     if is_valid_variable_name(&text) {
         return Expr::Variable(text);
+    }
+    if text == "[]" {
+        return Expr::Literal(Value::List(Vec::new()));
     }
     panic!("unexpected token `{}`", text)
 }

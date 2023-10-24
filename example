@@ -1,6 +1,67 @@
 (do
-    (put ">")
-    (= input (read))
-    (putl input)
+    (def (remove_empty list)
+        (= new [])
+        (for (= i 0) (< i (len list)) (+= i 1)
+            (= item (get i list))
+            (if (!= item "")
+                (+= new item)
+            )
+        )
+        new
+    )
+    (def (contains item list)
+        (= answer false)
+        (for (= i 0) (< i (len list)) (+= i 1)
+            (if (== item (get i list))
+                (= answer true)
+            )
+        )
+        answer
+    )
+
+    (putl "\n=== Hangman ===")
+    (= words (remove_empty (split "\n" (fopen "words.txt"))))
+
+    (forever
+        (= word (get (floor (* (random) (len words))) words))
+        (= correct "")
+        (= incorrect "")
+
+        (forever
+            (= show "")
+            (for (= i 0) (< i (len word)) (+= i 1)
+                (= ch (get i word))
+                (+= show (if (contains ch correct) ch "_"))
+            )
+
+            (if (== show word) (do
+                (putl "\n========\n   WIN\n========")
+                (break)
+            ))
+
+            (put
+                show
+                "\nChances: " (- 6 (len incorrect))
+                "\nCorrect: " correct
+                "\nIncorrect: " incorrect
+                "\nGuess: "
+            )
+            (= guess (read))
+
+            (if (contains guess word)
+                (if (not (contains guess correct))
+                    (+= correct guess)
+                )
+                (if (not (contains guess incorrect))
+                    (+= incorrect guess)
+                )
+            )
+
+            (if (>= (len incorrect) 6) (do
+                (putl "\n========\n  LOSS\n  The word was '" word "'\n========")
+                (break)
+            ))
+        )
+    )
 )
 
