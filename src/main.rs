@@ -1,28 +1,36 @@
-use std::{fmt, fs, ops, str::Chars};
+use std::{cmp, collections::HashMap, fmt, fs, ops, str::Chars};
 
 fn main() {
     let file = fs::read_to_string("example").unwrap();
+
     let tree = lex(file);
-    println!("{:#?}", tree);
+    // println!("{:#?}", tree);
+
     let tree = parse(tree);
-    println!("{:#?}", tree);
+    // println!("{:#?}", tree);
+
     let result = run(tree);
-    println!("result: {:?}", result);
+    if result != Value::Null {
+        println!(">> {}", result);
+    }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default, PartialEq)]
 enum Value {
+    #[default]
+    Null,
     Text(String),
     Number(i32),
-    Null,
+    Bool(bool),
 }
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Text(a) => write!(f, "{}", a),
-            Value::Number(a) => write!(f, "\x1b[32m{}\x1b[0m", a),
-            Value::Null => write!(f, "\x1b[31null\x1b[0m"),
+            Value::Number(a) => write!(f, "\x1b[33m{}\x1b[0m", a),
+            Value::Bool(a) => write!(f, "\x1b[1;33m{}\x1b[0m", a),
+            Value::Null => write!(f, "\x1b[31mnull\x1b[0m"),
         }
     }
 }
@@ -47,56 +55,138 @@ impl ops::Add for Value {
         }
     }
 }
-
-fn run(expr: Expr) -> Value {
-    run_part(expr, 0)
+impl cmp::PartialOrd for Value {
+    fn partial_cmp(&self, rhs: &Self) -> Option<cmp::Ordering> {
+        use Value as V;
+        match (self, rhs) {
+            (V::Number(a), V::Number(b)) => a.partial_cmp(b),
+            _ => panic!("type mismatch"),
+        }
+    }
 }
 
-fn run_part(expr: Expr, depth: usize) -> Value {
+type Variables = HashMap<String, Value>;
+
+fn run(expr: Expr) -> Value {
+    let mut vars = Variables::new();
+    run_part(expr, &mut vars, 0)
+}
+
+fn run_part(expr: Expr, vars: &mut Variables, depth: usize) -> Value {
     match expr {
         Expr::Method(Method { name, args }) => {
-            println!("{}:: {:?}", "  ".repeat(depth), name);
-            let mut args = args.into_iter().map(|arg| run_part(arg, depth + 1));
+            // println!("{}:: {:?}", "  ".repeat(depth), name);
+            // println!("{:?}", vars);
 
-            macro_rules! arg {
+            let mut args = args.into_iter();
+
+            /// Get next argument, without evaluating (lazy)
+            macro_rules! arg_expr {
                 () => {
                     args.next().expect("missing argument")
                 };
             }
+            /// Evaluate an expression
+            macro_rules! eval {
+                ( $expr:expr ) => {
+                    run_part($expr, vars, depth + 1)
+                };
+            }
+            /// Get next argument, and evaluate
+            macro_rules! arg {
+                () => {
+                    eval!(arg_expr!())
+                };
+            }
+            macro_rules! eval_all {
+                ( $args:expr ) => {
+                    $args.map(|arg| eval!(arg)).last().unwrap_or_default()
+                };
+            }
 
             match name.as_str() {
+                "do" => eval_all!(args),
                 "print" => {
                     for arg in args {
-                        print!("{}", arg);
+                        print!("{}", eval!(arg));
                     }
                     println!();
                     Value::Null
                 }
                 "*" => arg!() * arg!(),
                 "+" => arg!() + arg!(),
+                "<" => Value::Bool(arg!() < arg!()),
+                "set" | "=" => {
+                    let Expr::Variable(name) = arg_expr!() else {
+                        panic!("variable name must be string");
+                    };
+                    let value = arg!();
+                    vars.insert(name, value);
+                    Value::Null
+                }
+                "+=" => {
+                    let Expr::Variable(name) = arg_expr!() else {
+                        panic!("variable name must be string");
+                    };
+                    let rhs = arg!();
+                    let value = vars.get_mut(&name).expect("variable not set");
+                    *value = value.clone() + rhs;
+                    Value::Null
+                }
+                "while" => {
+                    let condition = arg_expr!();
+
+                    let mut last = Value::Null;
+                    while eval!(condition.clone()) == Value::Bool(true) {
+                        last = eval_all!(args.clone());
+                    }
+                    last
+                }
+                "for" => {
+                    let _ = arg!();
+                    let condition = arg_expr!();
+                    let run_each = arg_expr!();
+
+                    let mut last = Value::Null;
+                    while eval!(condition.clone()) == Value::Bool(true) {
+                        last = eval_all!(args.clone());
+                        eval!(run_each.clone());
+                    }
+                    last
+                }
                 _ => panic!("unknown method `{}`", name),
             }
         }
         Expr::Literal(value) => value,
-        _ => todo!(),
+        Expr::Variable(name) => vars
+            .get(&name)
+            .cloned()
+            .expect(&format!("undefined variable `{}`", name)),
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Expr {
     Method(Method),
     Literal(Value),
     Variable(String),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Method {
     name: String,
     args: Vec<Expr>,
 }
 
 fn parse(tree: TokenTree) -> Expr {
-    let token = Token::Group(tree);
+    let mut tokens = tree.0.into_iter();
+    let Some(token) = tokens.next() else {
+        panic!("no tokens!");
+    };
+    if let Token::Text(_) = token {
+        panic!("top level token must be a group");
+    }
+    assert!(tokens.next().is_none(), "too many tokens");
     parse_part(token, 0)
 }
 
@@ -118,8 +208,11 @@ fn parse_part(token: Token, depth: usize) -> Expr {
 }
 
 fn parse_text_token(text: String) -> Expr {
-    if text == "null" {
-        return Expr::Literal(Value::Null);
+    match text.as_str() {
+        "null" => return Expr::Literal(Value::Null),
+        "true" => return Expr::Literal(Value::Bool(true)),
+        "false" => return Expr::Literal(Value::Bool(false)),
+        _ => (),
     }
     if text.starts_with('"') && text.ends_with('"') {
         let mut chars = text.chars();
