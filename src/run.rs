@@ -55,6 +55,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     eval!(arg!())
                 };
             }
+            /// Evaluate all arguments, returning LAST value
             macro_rules! eval_all {
                 ( $args:expr ) => {{
                     let mut last = Value::default();
@@ -65,6 +66,19 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                         }
                     }
                     last
+                }};
+            }
+            /// Evaluate all arguments, returning ALL values
+            macro_rules! eval_all_values {
+                ( $args:expr ) => {{
+                    let mut values = Vec::new();
+                    for arg in $args {
+                        values.push(run_part(arg, state, depth + 1)?);
+                        if state.do_break {
+                            break;
+                        }
+                    }
+                    values
                 }};
             }
             macro_rules! no_more {
@@ -140,14 +154,14 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                 }
 
                 "put" | "->" => {
-                    for arg in args {
-                        print!("{}", eval!(arg));
+                    for value in eval_all_values!(args) {
+                        print!("{}", value);
                     }
                     Value::Null
                 }
                 "putl" | "=>" => {
-                    for arg in args {
-                        print!("{}", eval!(arg));
+                    for value in eval_all_values!(args) {
+                        print!("{}", value);
                     }
                     println!();
                     Value::Null

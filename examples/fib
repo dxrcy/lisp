@@ -1,0 +1,21 @@
+(def (fib_iter n)
+    (= a 0)
+    (= b 1)
+    (for (= i 1) (<= i n) (+= i 1)
+        (= c (+ a b))
+        (= a b)
+        (= b c)
+        (putl i ": " b)
+    )
+    b
+)
+
+(forever
+    (put "nth fibonacci number: ")
+    (= n (num (read)))
+    (? (== n null)
+        (putl "not a number")
+        (fib_iter n)
+    )
+)
+
