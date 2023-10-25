@@ -9,7 +9,7 @@ use std::{
 };
 
 fn main() {
-    let file = fs::read_to_string("example").unwrap();
+    let file = fs::read_to_string("test").unwrap();
 
     let tree = lex(file);
     // println!("{:#?}", tree);
@@ -255,7 +255,6 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                             break;
                         }
                     }
-                    // println!("after loop {}", okay_break);
                     last
                 }};
             }
@@ -299,30 +298,30 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
             }
 
             match name.as_str() {
-                "+" => arith2!(+),
-                "-" => arith2!(-),
-                "*" => arith2!(*),
-                "/" => arith2!(/),
-                "%" => arith2!(%),
-                "==" => comp2!(==),
-                "!=" => comp2!(!=),
-                "<" => comp2!(<),
-                ">" => comp2!(>),
-                "<=" => comp2!(<=),
-                ">=" => comp2!(>=),
-                "and" => logic2!(&&),
-                "or" => logic2!(||),
+                "add" | "+" => arith2!(+),
+                "sub" | "-" => arith2!(-),
+                "mul" | "*" => arith2!(*),
+                "div" | "/" => arith2!(/),
+                "mod" | "%" => arith2!(%),
+                "eq" | "==" => comp2!(==),
+                "ne" | "!=" => comp2!(!=),
+                "lt" | "<" => comp2!(<),
+                "gt" | ">" => comp2!(>),
+                "le" | "<=" => comp2!(<=),
+                "ge" | ">=" => comp2!(>=),
+                "and" | "&" => logic2!(&&),
+                "or" | "|" => logic2!(||),
                 "sqrt" => func1!(sqrt()),
                 "^2" => func1!(powi(2)),
-                "round" => func1!(round()),
-                "floor" => func1!(floor()),
-                "ceil" => func1!(ceil()),
-                "not" => {
+                "round" | "|-" => func1!(round()),
+                "floor" | "|_" => func1!(floor()),
+                "ceil" | "|^" => func1!(ceil()),
+                "not" | "!" => {
                     let a = eval_arg!().bool()?;
                     no_more!();
                     Value::Bool(!a)
                 }
-                "exit" => {
+                "exit" | "!!" => {
                     let code = match args.next() {
                         Some(arg) => eval!(arg).number()? as i32,
                         None => 0,
@@ -331,26 +330,26 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     process::exit(code)
                 }
 
-                "put" => {
+                "put" | "->" => {
                     for arg in args {
                         print!("{}", eval!(arg));
                     }
                     Value::Null
                 }
-                "putl" => {
+                "putl" | "=>" => {
                     for arg in args {
                         print!("{}", eval!(arg));
                     }
                     println!();
                     Value::Null
                 }
-                "inspect" => {
+                "inspect" | "?>" => {
                     for arg in args {
                         println!("{:?}", eval!(arg));
                     }
                     Value::Null
                 }
-                "=" => {
+                "set" | "=" => {
                     let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
                     };
@@ -359,7 +358,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     state.variables.insert(name, value);
                     Value::Null
                 }
-                "+=" => {
+                "inc" | "+=" => {
                     let Expr::Variable(name) = arg!() else {
                         panic!("variable name must be string");
                     };
@@ -369,7 +368,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     *value = (value.clone() + rhs)?;
                     Value::Null
                 }
-                "if" => {
+                "if" | "?" => {
                     let condition = eval_arg!();
                     let happy = arg!();
                     let unhappy = args.next();
@@ -384,12 +383,10 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                         }
                     }
                 }
-                "do" => {
-                    // println!("forever");
+                "do" | ":" => {
                     eval_all!(args)
                 }
-                "forever" => {
-                    // println!("forever");
+                "forever" | "@!" => {
                     let mut last;
                     loop {
                         last = eval_all!(args.clone());
@@ -400,8 +397,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     }
                     last
                 }
-                "while" => {
-                    // println!("while");
+                "while" | "@?" => {
                     let condition = arg!();
 
                     let mut last = Value::Null;
@@ -414,8 +410,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     }
                     last
                 }
-                "for" => {
-                    // println!("for");
+                "for" | "@:" => {
                     let _ = eval_arg!();
                     let condition = arg!();
                     let run_each = arg!();
@@ -431,21 +426,20 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     }
                     last
                 }
-                "break" => {
+                "break" | "!@" => {
                     state.do_break = true;
-                    // println!("call break");
                     Value::Null
                 }
-                "read" => {
+                "read" | "<-" => {
                     no_more!();
                     Value::Text(read_input())
                 }
-                "num" => {
+                "num" | "%0" => {
                     let a = eval_arg!();
                     no_more!();
                     a.as_number()
                 }
-                "fopen" => {
+                "fopen" | "<<" => {
                     let Value::Text(filename) = eval_arg!() else {
                         panic!("filename argument must be string");
                     };
@@ -453,7 +447,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                     let file = fs::read_to_string(filename).expect("Failed to open file");
                     Value::Text(file)
                 }
-                "split" => {
+                "split" | "<>" => {
                     let delim = eval_arg!().text()?;
                     let input = eval_arg!().text()?;
                     no_more!();
@@ -464,7 +458,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                             .collect(),
                     )
                 }
-                "len" => {
+                "len" | ".#" => {
                     let a = eval_arg!();
                     no_more!();
                     match a.length() {
@@ -472,7 +466,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                         None => Value::Null,
                     }
                 }
-                "get" => {
+                "get" | ".?" => {
                     let index = eval_arg!().number()?;
                     let list = eval_arg!().list()?;
                     match list.get(index as usize) {
@@ -480,11 +474,11 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                         None => Value::Null,
                     }
                 }
-                "random" => {
+                "rand" | "!?" => {
                     let mut rng = rand::thread_rng();
                     Value::Number(rng.gen_range(0.0..=1.0))
                 }
-                "def" => {
+                "def" | ":=" => {
                     let Expr::Method(Method {
                         name,
                         args: param_exprs,
@@ -613,9 +607,9 @@ fn parse_part(token: Token, depth: usize) -> Option<Expr> {
 
 fn parse_text_token(text: String) -> Expr {
     match text.as_str() {
-        "null" => return Expr::Literal(Value::Null),
-        "true" => return Expr::Literal(Value::Bool(true)),
-        "false" => return Expr::Literal(Value::Bool(false)),
+        ".n"|"null" => return Expr::Literal(Value::Null),
+        ".t"|"true" => return Expr::Literal(Value::Bool(true)),
+        ".f"|"false" => return Expr::Literal(Value::Bool(false)),
         _ => (),
     }
     if text.starts_with('"') && text.ends_with('"') {
