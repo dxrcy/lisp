@@ -2,14 +2,17 @@ use rand::Rng;
 use std::{
     cmp,
     collections::HashMap,
-    fmt, fs,
+    env, fmt, fs,
     io::{stdin, stdout, Write},
     ops, process,
     str::Chars,
 };
 
 fn main() {
-    let file = fs::read_to_string("test").unwrap();
+    let mut args = env::args();
+    args.next();
+    let filename = args.next().unwrap_or("test".to_string());
+    let file = fs::read_to_string(filename).expect("Cannot open that file");
 
     let tree = lex(file);
     // println!("{:#?}", tree);
@@ -474,7 +477,7 @@ fn run_part(expr: Expr, state: &mut State, depth: usize) -> Result<Value, Runtim
                         None => Value::Null,
                     }
                 }
-                "rand" | "!?" => {
+                "random" | "!?" => {
                     let mut rng = rand::thread_rng();
                     Value::Number(rng.gen_range(0.0..=1.0))
                 }
@@ -570,16 +573,10 @@ struct Method {
     args: Vec<Expr>,
 }
 
-fn parse(tree: TokenTree) -> Expr {
-    let mut tokens = tree.0.into_iter();
-    let Some(token) = tokens.next() else {
-        panic!("no tokens!");
-    };
-    if let Token::Text(_) = token {
-        panic!("top level token must be a group");
-    }
-    assert!(tokens.next().is_none(), "too many tokens");
-    parse_part(token, 0).expect("nothing here to run!")
+fn parse(mut tree: TokenTree) -> Expr {
+    // Wrap in `do` group, so multiple methods can be executed
+    tree.0.insert(0, Token::Text("do".to_string()));
+    parse_part(Token::Group(tree), 0).expect("nothing here to run!")
 }
 
 fn parse_part(token: Token, depth: usize) -> Option<Expr> {
@@ -607,9 +604,9 @@ fn parse_part(token: Token, depth: usize) -> Option<Expr> {
 
 fn parse_text_token(text: String) -> Expr {
     match text.as_str() {
-        ".n"|"null" => return Expr::Literal(Value::Null),
-        ".t"|"true" => return Expr::Literal(Value::Bool(true)),
-        ".f"|"false" => return Expr::Literal(Value::Bool(false)),
+        ".n" | "null" => return Expr::Literal(Value::Null),
+        ".t" | "true" => return Expr::Literal(Value::Bool(true)),
+        ".f" | "false" => return Expr::Literal(Value::Bool(false)),
         _ => (),
     }
     if text.starts_with('"') && text.ends_with('"') {
