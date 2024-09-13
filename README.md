@@ -1,6 +1,8 @@
-# Some lisp-like language
+# A Lisp-like language
 
-idk.
+See `/examples`
 
-see /examples
+```sh
+cargo run
+```
 
